@@ -22,6 +22,7 @@ OPENVPN_INSTALL_SHA256="f10e139ee7f7a52fc022208c1c9ac110093605bddbe7e3fa19897d1a
 ADMIN_USERNAME="admin"
 SKIP_OPENVPN=0
 SKIP_PANEL=0
+REQUESTED_IMAGE="${VPNUI_IMAGE:-liwyd/vpnui:latest}"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
@@ -39,9 +40,11 @@ Usage:
 Options:
   --non-interactive   Never prompt (default when stdin is not a TTY)
   --admin-user NAME   Bootstrap admin username (default: admin)
+  --image NAME        Registry image to use (default: liwyd/vpnui:latest;
+                      falls back to a local build if it cannot be pulled)
   --skip-openvpn      Reuse whatever OpenVPN installation exists
-  --skip-panel        Only provision OpenVPN, do not install the panel
-  --install-dir DIR   Panel install directory (default: /opt/vpnui)
+  --skip-panel        Provision OpenVPN only
+  --install-dir DIR   Panel directory (default: /opt/vpnui)
   -h, --help          Show this help
   --version           Show version
 EOF
@@ -50,6 +53,11 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --non-interactive) ;; # accepted for compatibility — the installer never prompts
+  --image)
+    REQUESTED_IMAGE="${2:-}"
+    [[ -n "$REQUESTED_IMAGE" ]] || die "--image requires a name (e.g. liwyd/vpnui:latest)"
+    shift
+    ;;
   --admin-user)
     ADMIN_USERNAME="${2:-}"
     [[ "$ADMIN_USERNAME" =~ ^[A-Za-z0-9._-]{1,64}$ ]] ||
@@ -199,14 +207,40 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Build + start
+# Panel image: pull the published image from Docker Hub first; only build
+# locally when the registry image is unavailable (not yet published, private
+# repo, or no outbound registry access).
 # ---------------------------------------------------------------------------
-log "building and starting the panel container"
-(
-  cd "$INSTALL_DIR"
-  "${COMPOSE[@]}" build
-  "${COMPOSE[@]}" up -d
-)
+IMAGE_FROM_REGISTRY=0
+log "starting the panel container"
+if "${COMPOSE[0]}" pull "$REQUESTED_IMAGE" >/dev/null 2>&1; then
+  IMAGE_FROM_REGISTRY=1
+  ok "pulled $REQUESTED_IMAGE from Docker Hub"
+else
+  warn "could not pull $REQUESTED_IMAGE (not published yet, or registry unreachable)"
+  warn "falling back to a local image build"
+fi
+
+# Keep compose in sync: IMAGE_NAME decides which image `up` uses
+# (docker-compose.yml: image: ${IMAGE_NAME:-vpnui:local}).
+if [[ $IMAGE_FROM_REGISTRY -eq 1 ]]; then
+  if grep -q '^IMAGE_NAME=' "$ENV_FILE"; then
+    sed -i "s|^IMAGE_NAME=.*|IMAGE_NAME=$REQUESTED_IMAGE|" "$ENV_FILE"
+  else
+    printf '\n# Registry image: vpnui update pulls this instead of building\nIMAGE_NAME=%s\n' \
+      "$REQUESTED_IMAGE" >>"$ENV_FILE"
+  fi
+  chmod 600 "$ENV_FILE"
+  log "starting from the registry image (no local build)"
+  (cd "$INSTALL_DIR" && "${COMPOSE[@]}" up -d --no-build)
+else
+  if grep -q '^IMAGE_NAME=' "$ENV_FILE"; then
+    sed -i '/^IMAGE_NAME=/d' "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+  fi
+  log "building the image locally"
+  (cd "$INSTALL_DIR" && "${COMPOSE[@]}" build && "${COMPOSE[@]}" up -d)
+fi
 
 log "waiting for the panel to become healthy"
 HEALTHY=0
@@ -249,6 +283,11 @@ echo
 echo "────────────────────────────  vpnui installed  ────────────────────────────"
 echo " Panel:      http://127.0.0.1:3000  (put a TLS reverse proxy in front for remote access)"
 echo " Install:    $INSTALL_DIR"
+if [[ $IMAGE_FROM_REGISTRY -eq 1 ]]; then
+  echo " Image:      $REQUESTED_IMAGE (pulled from Docker Hub)"
+else
+  echo " Image:      built locally (registry image unavailable at install time)"
+fi
 if [[ $SKIP_OPENVPN -eq 1 ]]; then
   OPENVPN_STATE="skipped"
 elif openvpn_usable; then

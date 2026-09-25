@@ -44,7 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/Liwyd/vpnui/main/scripts/install.sh
 ```
 
 The installer prints the initial admin credentials **once** — copy them
-immediately. Then:
+immediately. It pulls the published image (`liwyd/vpnui:latest`) from Docker
+Hub and only builds locally when the registry image is unavailable
+(`--image` to override). Then:
 
 ```bash
 vpnui doctor    # verify the whole stack, with fix hints
@@ -62,7 +64,7 @@ access — the panel deliberately serves plain HTTP on loopback by default).
 | `vpnui install` | (Re)run the idempotent installer |
 | `vpnui start` / `stop` / `restart` / `status` | Container lifecycle |
 | `vpnui logs` | Follow panel logs |
-| `vpnui update` | Backup → update source → rebuild → restart → health check |
+| `vpnui update` | Backup → pull registry image (or rebuild) → restart → health check |
 | `vpnui backup [DIR]` | Archive PKI + panel data + `.env` |
 | `vpnui restore <archive>` | Restore a backup (safety backup first) |
 | `vpnui doctor` | Diagnostics with ✓/⚠/✗ and fix hints |

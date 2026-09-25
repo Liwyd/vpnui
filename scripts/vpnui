@@ -76,24 +76,35 @@ cmd_update() {
   log "creating pre-update backup"
   bash "$LIB_DIR/backup.sh" --quiet
 
-  if [[ -d "$INSTALL_DIR/.git" ]]; then
-    log "updating source (git pull)"
-    git -C "$INSTALL_DIR" pull --ff-only
-  elif [[ -n "${VPNUI_SOURCE:-}" && -d "$VPNUI_SOURCE" ]]; then
-    log "updating source from $VPNUI_SOURCE"
-    for item in Dockerfile docker-compose.yml package.json package-lock.json backend public scripts; do
-      [[ -e "$VPNUI_SOURCE/$item" ]] || continue
-      rm -rf "${INSTALL_DIR:?}/$item"
-      cp -a "$VPNUI_SOURCE/$item" "$INSTALL_DIR/"
-    done
+  if grep -q '^IMAGE_NAME=' "$INSTALL_DIR/.env" 2>/dev/null; then
+    # Registry mode: pull the published image instead of building.
+    local image
+    image="$(grep '^IMAGE_NAME=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2-)"
+    log "pulling $image"
+    compose pull || warn "pull failed — trying with the image already present"
+    log "restarting panel"
+    compose up -d --no-build
   else
-    warn "no git repo or VPNUI_SOURCE set — rebuilding with the current source tree"
-  fi
+    # Local build mode: refresh the source tree, then rebuild.
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+      log "updating source (git pull)"
+      git -C "$INSTALL_DIR" pull --ff-only
+    elif [[ -n "${VPNUI_SOURCE:-}" && -d "$VPNUI_SOURCE" ]]; then
+      log "updating source from $VPNUI_SOURCE"
+      for item in Dockerfile docker-compose.yml package.json package-lock.json backend public scripts; do
+        [[ -e "$VPNUI_SOURCE/$item" ]] || continue
+        rm -rf "${INSTALL_DIR:?}/$item"
+        cp -a "$VPNUI_SOURCE/$item" "$INSTALL_DIR/"
+      done
+    else
+      warn "no git repo or VPNUI_SOURCE set — rebuilding with the current source tree"
+    fi
 
-  log "rebuilding image"
-  compose build
-  log "restarting panel"
-  compose up -d
+    log "rebuilding image"
+    compose build
+    log "restarting panel"
+    compose up -d
+  fi
 
   log "health check"
   for _ in $(seq 1 45); do

@@ -36,20 +36,38 @@ sudo scripts/install.sh
 3. **Generates secrets** into `/opt/vpnui/.env` (mode 600):
    `JWT_SECRET=$(openssl rand -hex 32)` plus one-shot
    `ADMIN_USERNAME`/`ADMIN_PASSWORD`.
-4. **Builds and starts the container**, waits for `GET /health`.
-5. **Prints the initial admin credentials once**, then deletes the bootstrap
+4. **Pulls the published image** (`liwyd/vpnui:latest` by default) from
+   Docker Hub and starts it with `--no-build`. If the image cannot be pulled
+   (not yet published, private repo, or registry unreachable) it **falls
+   back to building locally** — see the build log for which path was used.
+5. **Waits for `GET /health`**.
+6. **Prints the initial admin credentials once**, then deletes the bootstrap
    variables from `.env`.
-6. **Installs the CLI**: `/usr/local/bin/vpnui` and
+7. **Installs the CLI**: `/usr/local/bin/vpnui` and
    `/usr/local/lib/vpnui/{doctor,backup,restore}.sh`.
 
 The installer is idempotent — re-running it is the upgrade path
-(`vpnui update` does the same with a backup first).
+(`vpnui update` pulls the newest registry image, or rebuilds, with a backup
+first).
+
+### Image source
+
+| Situation | Result |
+| --- | --- |
+| Registry image pullable (default `liwyd/vpnui:latest`) | No build on the host — `IMAGE_NAME` written to `.env`, `compose up -d --no-build` |
+| Pull fails | Local build from the copied source tree (works offline from the registry) |
+| Custom registry/user | `sudo scripts/install.sh --image <user>/vpnui:<tag>` (or `VPNUI_IMAGE=...`) |
+
+`vpnui update` follows the same rule: if `.env` has `IMAGE_NAME`, it runs
+`compose pull` + `up -d --no-build`; otherwise it refreshes the source and
+rebuilds.
 
 ### Installer options
 
 ```text
 --non-interactive   Never prompt (automatic when stdin is not a TTY)
 --admin-user NAME   Bootstrap admin username (default: admin)
+--image NAME        Registry image (default: liwyd/vpnui:latest)
 --skip-openvpn      Panel only; keep whatever OpenVPN installation exists
 --skip-panel        Provision OpenVPN only
 --install-dir DIR   Panel directory (default: /opt/vpnui)
