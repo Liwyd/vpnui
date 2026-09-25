@@ -5,6 +5,12 @@
 
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
+# Resilience for flaky links (VPS builds): npm defaults are 2 retries and 15
+# parallel sockets — a single dropped tarball fetch fails the whole build.
+ENV NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=10000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=60000 \
+    NPM_CONFIG_MAXSOCKETS=5
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

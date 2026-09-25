@@ -6,11 +6,19 @@
 #
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 INSTALL_DIR="${VPNUI_DIR:-/opt/vpnui}"
 SERVER_DIR="${OPENVPN_SERVER_DIR:-/etc/openvpn/server}"
 ENV_FILE="$INSTALL_DIR/.env"
-PANEL_URL="http://127.0.0.1:3000"
+# Panel address derived from .env (VPNUI_BIND/PANEL_PORT, defaults 127.0.0.1:3000)
+PANEL_PORT="$(grep '^PANEL_PORT=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+[[ "$PANEL_PORT" =~ ^[0-9]{1,5}$ ]] || PANEL_PORT=3000
+PANEL_BIND="$(grep '^VPNUI_BIND=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+case "$PANEL_BIND" in
+"" | 127.0.0.1 | 0.0.0.0) PANEL_HOST="127.0.0.1" ;;
+*) PANEL_HOST="$PANEL_BIND" ;;
+esac
+PANEL_URL="http://$PANEL_HOST:$PANEL_PORT"
 ERRORS=0
 WARNINGS=0
 PASSED=0
@@ -33,10 +41,19 @@ fail() {
 }
 
 detect_compose() {
-  if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
+  if command -v docker >/dev/null && docker compose version >/dev/null 2>&1 &&
+    docker info >/dev/null 2>&1; then
     COMPOSE=(docker compose)
-  elif command -v podman >/dev/null && podman compose version >/dev/null 2>&1; then
-    COMPOSE=(podman compose)
+  elif command -v podman >/dev/null && podman compose version >/dev/null 2>&1 &&
+    podman info >/dev/null 2>&1; then
+    local sock
+    sock="$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || true)"
+    if [[ -n "$sock" && -S "$sock" ]]; then
+      COMPOSE=(podman compose)
+    else
+      COMPOSE_HINT="podman API socket not running — start it: systemctl --user start podman.socket"
+      return 1
+    fi
   else
     return 1
   fi
@@ -78,7 +95,8 @@ COMPOSE=()
 if detect_compose; then
   pass "compose: ${COMPOSE[*]}"
 else
-  fail "compose: no docker/podman compose found" "apt-get install -y docker.io docker-compose-v2  (or: dnf install -y docker-compose)"
+  fail "compose: no usable docker/podman compose found" \
+    "apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker${COMPOSE_HINT:+ — $COMPOSE_HINT}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -275,6 +293,7 @@ fi
 
 if [[ -f "$ENV_FILE" ]]; then
   pass "env file: $ENV_FILE"
+  pass "listen: ${PANEL_BIND:-127.0.0.1 (default)} port $PANEL_PORT"
   JWT_LINE="$(grep '^JWT_SECRET=' "$ENV_FILE" 2>/dev/null | head -1 || true)"
   JWT_VALUE="${JWT_LINE#JWT_SECRET=}"
   if [[ ${#JWT_VALUE} -ge 32 ]]; then

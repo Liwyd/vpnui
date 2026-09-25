@@ -16,21 +16,24 @@ services:
     container_name: vpnui
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      # VPNUI_BIND: 127.0.0.1 (loopback, reverse proxy) or 0.0.0.0 (direct)
+      # PANEL_PORT: host + container listen port (the app honours PORT).
+      - "${VPNUI_BIND:-127.0.0.1}:${PANEL_PORT:-3000}:${PANEL_PORT:-3000}"
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      PORT: ${PANEL_PORT:-3000}
       OPENVPN_SERVER_DIR: /etc/openvpn/server
       DATA_DIR: /var/lib/vpnui
     volumes:
-      # PKI (rw: certs are issued/revoked by the panel).
-      # ":z" relabels the mount for SELinux hosts (harmless elsewhere).
-      - /etc/openvpn/server:/etc/openvpn/server:rw,z
+      # PKI (rw: certs are issued/revoked by the panel). Host side is
+      # overridable for custom layouts; ":z" relabels for SELinux hosts.
+      - ${VPNUI_OVPN_HOST_DIR:-/etc/openvpn/server}:/etc/openvpn/server:rw,z
       # Panel state (users, audit log, generated client profiles).
       # Bind mount (not a named volume) so vpnui backup/restore can archive
       # it directly from the host filesystem.
-      - /var/lib/vpnui:/var/lib/vpnui:rw,z
+      - ${VPNUI_DATA_HOST_DIR:-/var/lib/vpnui}:/var/lib/vpnui:rw,z
       # Optional observability mounts (uncomment if the host has them)
       # - /var/run/openvpn-server:/var/run/openvpn-server:rw  # session kick
       # - /var/log/openvpn:/var/log/openvpn:ro                # live sessions
