@@ -9,8 +9,8 @@ set -euo pipefail
 
 INSTALL_DIR="${VPNUI_DIR:-/opt/vpnui}"
 SERVER_DIR="${OPENVPN_SERVER_DIR:-/etc/openvpn/server}"
-DATA_DIR_HOST="/var/lib/vpnui"
-DEST_DIR="/var/backups/vpnui"
+DATA_DIR_HOST="${VPNUI_DATA_DIR:-/var/lib/vpnui}"
+DEST_DIR="${VPNUI_BACKUP_DIR:-/var/backups/vpnui}"
 QUIET=0
 
 die() { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
