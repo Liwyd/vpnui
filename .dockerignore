@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+data
+.env
+*.env
+!.env.example
+tests
+docs
+AUDIT.md
+IMPLEMENTATION_PLAN.md
+*.md
+!README.md
+Dockerfile
+docker-compose*.yml
+.dockerignore

@@ -1,0 +1,44 @@
+# VPNUI — panel container next to a host OpenVPN server (Architecture A).
+#
+# Prerequisites on the host:
+#   - OpenVPN configured by the installer (modern layout: /etc/openvpn/server)
+#   - .env with a strong JWT_SECRET (see .env.example)
+#
+# The panel runs with: all capabilities dropped, a read-only root filesystem,
+# no-new-privileges, and exactly two writable mounts (PKI + panel data).
+# The management-socket and status-file mounts are optional but needed for
+# "kick active session" and live session display.
+
+services:
+  vpnui:
+    build: .
+    image: ${IMAGE_NAME:-vpnui:local}
+    container_name: vpnui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      OPENVPN_SERVER_DIR: /etc/openvpn/server
+      DATA_DIR: /var/lib/vpnui
+    volumes:
+      # PKI (rw: certs are issued/revoked by the panel).
+      # ":z" relabels the mount for SELinux hosts (harmless elsewhere).
+      - /etc/openvpn/server:/etc/openvpn/server:rw,z
+      # Panel state (users, audit log, generated client profiles)
+      - vpnui-data:/var/lib/vpnui:rw
+      # Optional observability mounts (uncomment if the host has them)
+      # - /var/run/openvpn-server:/var/run/openvpn-server:rw  # session kick
+      # - /var/log/openvpn:/var/log/openvpn:ro                # live sessions
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+volumes:
+  vpnui-data:
