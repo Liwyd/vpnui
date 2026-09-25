@@ -1,40 +1,81 @@
-// Global variables
+// State
 let currentConfig = null;
 let currentConfigName = null;
 let token = localStorage.getItem('token');
+let currentUser = null;
+
+// --- API layer: single place that understands the {success,data,error} envelope ---
+async function api(path, { method = 'GET', body } = {}) {
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+    const response = await fetch(path, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+    let payload = null;
+    try {
+        payload = await response.json();
+    } catch {
+        /* non-JSON response (proxy error page, etc.) */
+    }
+
+    if (response.status === 401) {
+        handleLogout();
+        throw new Error('Session expired. Please log in again.');
+    }
+    if (!response.ok) {
+        const message =
+            (payload && payload.error && payload.error.message) ||
+            `Request failed (${response.status})`;
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+    }
+    return payload ? payload.data : null;
+}
 
 // Initial setup
 document.addEventListener('DOMContentLoaded', () => {
-    if (token) {
-        showDashboard();
-    }
+    if (token) showDashboard();
 });
 
-// Event Listeners
+// Static listeners
 document.getElementById('loginForm').addEventListener('submit', handleLogin);
 document.getElementById('logoutBtn').addEventListener('click', handleLogout);
 document.getElementById('addClientBtn').addEventListener('click', () => showModal('addClientModal'));
 document.getElementById('addClientForm').addEventListener('submit', handleAddClient);
+document.getElementById('usePassword').addEventListener('change', (e) => {
+    const row = document.getElementById('clientPasswordRow');
+    const input = document.getElementById('clientPassword');
+    row.classList.toggle('hidden', !e.target.checked);
+    input.required = e.target.checked;
+    if (!e.target.checked) input.value = '';
+});
 
-// Authentication Functions
-async function handleLogin(e) {
-    e.preventDefault();
+// Delegated actions (replaces inline onclick attributes; CSP-safe)
+document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    const { action, modal, client, user } = button.dataset;
+    if (action === 'close-modal') closeModal(modal);
+    else if (action === 'download-config') downloadConfig();
+    else if (action === 'config') showClientConfig(client);
+    else if (action === 'delete-client') deleteClient(client);
+    else if (action === 'reset-password') resetUserPassword(user);
+    else if (action === 'delete-user') deleteUser(user);
+});
+
+// --- Authentication ---
+async function handleLogin(event) {
+    event.preventDefault();
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
-
     try {
-        const response = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Login failed');
-        }
-
-        const data = await response.json();
+        const data = await api('/api/login', { method: 'POST', body: { username, password } });
         token = data.token;
         localStorage.setItem('token', token);
         showDashboard();
@@ -46,10 +87,11 @@ async function handleLogin(e) {
 function handleLogout() {
     localStorage.removeItem('token');
     token = null;
+    currentUser = null;
     showLogin();
 }
 
-// UI Control Functions
+// --- UI control ---
 function showDashboard() {
     document.getElementById('loginSection').classList.add('hidden');
     document.getElementById('dashboardSection').classList.remove('hidden');
@@ -63,79 +105,81 @@ function showLogin() {
 }
 
 function showModal(modalId) {
-    document.getElementById(modalId).classList.remove('hidden');
-    document.getElementById(modalId).classList.add('flex');
+    const modal = document.getElementById(modalId);
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
 }
 
 function closeModal(modalId) {
-    document.getElementById(modalId).classList.add('hidden');
-    document.getElementById(modalId).classList.remove('flex');
+    const modal = document.getElementById(modalId);
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
 }
 
-// Client Management Functions
+function actionButton(label, action, datasetKey, value, className) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = action;
+    button.dataset[datasetKey] = value;
+    button.className = className;
+    button.textContent = label;
+    return button;
+}
+
+// --- Clients ---
 async function loadClients() {
     try {
-        const response = await fetch('/api/clients', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const data = await api('/api/clients');
+        const list = document.getElementById('clientsList');
+        list.replaceChildren();
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to load clients');
-        }
-
-        const data = await response.json();
-        const clientsList = document.getElementById('clientsList');
-        clientsList.innerHTML = '';
-
-        data.clients.forEach(client => {
+        for (const client of data.clients) {
             const row = document.createElement('tr');
-            row.innerHTML = `
-                <td class="px-6 py-4 whitespace-nowrap">${client}</td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <button onclick="downloadClientConfig('${client}')" class="text-blue-500 hover:text-blue-700 mr-4">
-                        <i class="fas fa-download"></i> Config
-                    </button>
-                    <button onclick="deleteClient('${client}')" class="text-red-500 hover:text-red-700">
-                        <i class="fas fa-trash"></i> Delete
-                    </button>
-                </td>
-            `;
-            clientsList.appendChild(row);
-        });
+
+            const nameCell = document.createElement('td');
+            nameCell.className = 'px-6 py-4 whitespace-nowrap';
+            nameCell.textContent = client.name;
+            if (client.status && client.status !== 'valid') {
+                const badge = document.createElement('span');
+                badge.className = 'ml-2 text-xs uppercase text-gray-500';
+                badge.textContent = `(${client.status})`;
+                nameCell.appendChild(badge);
+            }
+
+            const actionsCell = document.createElement('td');
+            actionsCell.className = 'px-6 py-4 whitespace-nowrap';
+            if (client.status !== 'revoked') {
+                actionsCell.appendChild(
+                    actionButton('Config', 'config', 'client', client.name, 'text-blue-500 hover:text-blue-700 mr-4')
+                );
+            }
+            actionsCell.appendChild(
+                actionButton('Delete', 'delete-client', 'client', client.name, 'text-red-500 hover:text-red-700')
+            );
+
+            row.append(nameCell, actionsCell);
+            list.appendChild(row);
+        }
     } catch (error) {
         alert('Error loading clients: ' + error.message);
-        if (error.message.includes('Invalid token')) {
-            handleLogout();
-        }
     }
 }
 
-async function handleAddClient(e) {
-    e.preventDefault();
-    const clientName = document.getElementById('clientName').value;
+async function handleAddClient(event) {
+    event.preventDefault();
+    const clientName = document.getElementById('clientName').value.trim();
     const usePassword = document.getElementById('usePassword').checked;
+    const password = document.getElementById('clientPassword').value;
 
     try {
-        const response = await fetch('/api/clients', {
+        const created = await api('/api/clients', {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ clientName, usePassword })
+            body: { clientName, usePassword, ...(usePassword ? { password } : {}) },
         });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to create client');
-        }
-
-        const data = await response.json();
-        currentConfig = data.configFile;
+        document.getElementById('addClientForm').reset();
+        document.getElementById('clientPasswordRow').classList.add('hidden');
         closeModal('addClientModal');
-        showModal('configModal');
-        document.getElementById('configContent').textContent = data.configFile;
+        await showClientConfig(created.clientName);
         loadClients();
     } catch (error) {
         alert('Error creating client: ' + error.message);
@@ -143,42 +187,24 @@ async function handleAddClient(e) {
 }
 
 async function deleteClient(clientName) {
-    if (!confirm(`Are you sure you want to delete client "${clientName}"?`)) return;
-
+    if (!confirm(`Are you sure you want to revoke client "${clientName}"?`)) return;
     try {
-        const response = await fetch(`/api/clients/${clientName}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to delete client');
-        }
-
+        await api(`/api/clients/${encodeURIComponent(clientName)}`, { method: 'DELETE' });
         loadClients();
     } catch (error) {
         alert('Error deleting client: ' + error.message);
     }
 }
 
-async function downloadClientConfig(clientName) {
+async function showClientConfig(clientName) {
     try {
-        const response = await fetch(`/api/clients/${clientName}/config`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to get client config');
-        }
-
-        const data = await response.json();
+        const data = await api(`/api/clients/${encodeURIComponent(clientName)}/config`);
         currentConfig = data.config;
-        currentConfigName = clientName;
-        document.getElementById('cname').textContent = `Client Config: ${clientName}`;
-        showModal('configModal');
+        currentConfigName = data.clientName;
+        document.getElementById('cname').textContent = `Client Config: ${data.clientName}`;
+        // textContent only — profile text is never interpreted as HTML.
         document.getElementById('configContent').textContent = data.config;
+        showModal('configModal');
     } catch (error) {
         alert('Error getting client config: ' + error.message);
     }
@@ -186,229 +212,110 @@ async function downloadClientConfig(clientName) {
 
 function downloadConfig() {
     if (!currentConfig) return;
-
     const blob = new Blob([currentConfig], { type: 'text/plain' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${currentConfigName}.ovpn` || 'client.ovpn';
+    a.download = currentConfigName ? `${currentConfigName}.ovpn` : 'client.ovpn';
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
 }
 
-// Admin Functions
+// --- Admin: users ---
 async function checkAdminStatus() {
     try {
-        const response = await fetch('/api/users/me', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to get user info');
-        }
-
-        const data = await response.json();
-        document.getElementById('userDisplay').textContent = `${data.username} (${data.role})`;
-
-        if (data.role === 'admin') {
+        const me = await api('/api/users/me');
+        currentUser = me.username;
+        document.getElementById('userDisplay').textContent = `${me.username} (${me.role})`;
+        if (me.role === 'admin') {
             document.getElementById('adminSection').classList.remove('hidden');
             loadUsers();
+        } else {
+            document.getElementById('adminSection').classList.add('hidden');
         }
     } catch (error) {
         console.error('Error checking admin status:', error);
-        if (error.message.includes('Invalid token')) {
-            handleLogout();
-        }
     }
 }
 
 async function loadUsers() {
     try {
-        const response = await fetch('/api/users', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const data = await api('/api/users');
+        const list = document.getElementById('usersList');
+        list.replaceChildren();
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to load users');
-        }
-
-        const data = await response.json();
-        const usersList = document.getElementById('usersList');
-        usersList.innerHTML = '';
-
-        data.users.forEach(user => {
+        for (const user of data.users) {
             const row = document.createElement('tr');
-            row.innerHTML = `
-                <td class="px-6 py-4 whitespace-nowrap">${user.username}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${user.role}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${formatDate(user.lastLogin)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <button onclick="editUser('${user.username}')" class="text-blue-500 hover:text-blue-700 mr-2">
-                        <i class="fas fa-edit"></i> Edit
-                    </button>
-                    <button onclick="resetUserPassword('${user.username}')" class="text-yellow-500 hover:text-yellow-700 mr-2">
-                        <i class="fas fa-key"></i> Reset Password
-                    </button>
-                    ${user.username !== 'admin' ? `
-                        <button onclick="deleteUser('${user.username}')" class="text-red-500 hover:text-red-700">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    ` : ''}
-                </td>
-            `;
-            usersList.appendChild(row);
-        });
+
+            const usernameCell = document.createElement('td');
+            usernameCell.className = 'px-6 py-4 whitespace-nowrap';
+            usernameCell.textContent = user.username;
+
+            const roleCell = document.createElement('td');
+            roleCell.className = 'px-6 py-4 whitespace-nowrap';
+            roleCell.textContent = user.role;
+
+            const lastLoginCell = document.createElement('td');
+            lastLoginCell.className = 'px-6 py-4 whitespace-nowrap';
+            lastLoginCell.textContent = formatDate(user.lastLogin);
+
+            const actionsCell = document.createElement('td');
+            actionsCell.className = 'px-6 py-4 whitespace-nowrap';
+            actionsCell.appendChild(
+                actionButton('Reset Password', 'reset-password', 'user', user.username, 'text-yellow-500 hover:text-yellow-700 mr-2')
+            );
+            if (user.username !== currentUser) {
+                actionsCell.appendChild(
+                    actionButton('Delete', 'delete-user', 'user', user.username, 'text-red-500 hover:text-red-700')
+                );
+            }
+
+            row.append(usernameCell, roleCell, lastLoginCell, actionsCell);
+            list.appendChild(row);
+        }
     } catch (error) {
-        console.error('Error loading users:', error);
         alert('Error loading users: ' + error.message);
-    }
-}
-
-async function createUser(userData) {
-    try {
-        const response = await fetch('/api/users', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(userData)
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to create user');
-        }
-
-        await loadUsers();
-        closeModal('addUserModal');
-    } catch (error) {
-        alert('Error creating user: ' + error.message);
-    }
-}
-
-async function editUser(username) {
-    try {
-        const response = await fetch(`/api/users/${username}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to get user details');
-        }
-
-        const user = await response.json();
-        document.getElementById('editUsername').value = user.username;
-        document.getElementById('editRole').value = user.role;
-        showModal('editUserModal');
-    } catch (error) {
-        alert('Error loading user details: ' + error.message);
-    }
-}
-
-async function updateUser(username, userData) {
-    try {
-        const response = await fetch(`/api/users/${username}`, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(userData)
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to update user');
-        }
-
-        await loadUsers();
-        closeModal('editUserModal');
-    } catch (error) {
-        alert('Error updating user: ' + error.message);
     }
 }
 
 async function deleteUser(username) {
     if (!confirm(`Are you sure you want to delete user "${username}"?`)) return;
-
     try {
-        const response = await fetch(`/api/users/${username}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to delete user');
-        }
-
-        await loadUsers();
+        await api(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
+        loadUsers();
     } catch (error) {
         alert('Error deleting user: ' + error.message);
     }
 }
 
 async function resetUserPassword(username) {
-    const newPassword = prompt(`Enter new password for user "${username}"`);
+    const newPassword = prompt(`Enter new password for user "${username}" (at least 8 characters)`);
     if (!newPassword) return;
-
+    if (newPassword.length < 8) {
+        alert('Password must be at least 8 characters.');
+        return;
+    }
     try {
-        const response = await fetch(`/api/users/${username}/reset-password`, {
+        await api(`/api/users/${encodeURIComponent(username)}/reset-password`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ password: newPassword })
+            body: { password: newPassword },
         });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to reset password');
-        }
-
         alert('Password reset successfully');
+        loadUsers();
     } catch (error) {
         alert('Error resetting password: ' + error.message);
     }
 }
 
-// Utility Functions
+// --- Utilities ---
 function formatDate(dateString) {
     if (!dateString) return 'Never';
     return new Date(dateString).toLocaleString();
 }
 
-function handleApiError(error, defaultMessage = 'Operation failed') {
-    console.error('API Error:', error);
-
-    if (error.message.includes('Invalid token') || error.message.includes('jwt expired')) {
-        handleLogout();
-        return 'Session expired. Please log in again.';
-    }
-
-    return error.message || defaultMessage;
-}
-
-// Error Handler
 window.onerror = function (message, source, lineno, colno, error) {
     console.error('Global error:', { message, source, lineno, colno, error });
-    alert('An unexpected error occurred. Please try again or contact support if the problem persists.');
     return false;
 };
-
-// Export functions for use in HTML
-window.showModal = showModal;
-window.closeModal = closeModal;
-window.downloadConfig = downloadConfig;
-window.downloadClientConfig = downloadClientConfig;
-window.deleteClient = deleteClient;
-window.editUser = editUser;
-window.deleteUser = deleteUser;
-window.resetUserPassword = resetUserPassword;
