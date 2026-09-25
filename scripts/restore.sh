@@ -50,7 +50,9 @@ log "restoring files"
 tar -xzf "$ARCHIVE" -C /
 
 # Permissions that matter
-[[ -f "$INSTALL_DIR/.env" ]] && chmod 600 "$INSTALL_DIR/.env" || true
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+  chmod 600 "$INSTALL_DIR/.env"
+fi
 if [[ -f "$SERVER_DIR/server.key" ]]; then
   chown root:root "$SERVER_DIR/server.key" 2>/dev/null || true
   chmod 600 "$SERVER_DIR/server.key" 2>/dev/null || true

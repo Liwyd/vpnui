@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install OpenVPN toolchain (real crypto tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openvpn easy-rsa
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Shell scripts (syntax + shellcheck)
+        run: |
+          bash -n scripts/install.sh scripts/doctor.sh scripts/backup.sh scripts/restore.sh scripts/vpnui
+          shellcheck scripts/install.sh scripts/doctor.sh scripts/backup.sh scripts/restore.sh scripts/vpnui
+
+      - name: Frontend assets present (vendored, CSP-safe)
+        run: |
+          test -f public/vendor/tailwind.min.css
+          test -f public/js/main.js
+
+      - name: Test suite (unit + API + real-PKI integration)
+        run: npm test
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: vpnui:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

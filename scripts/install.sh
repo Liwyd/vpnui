@@ -210,7 +210,7 @@ log "building and starting the panel container"
 
 log "waiting for the panel to become healthy"
 HEALTHY=0
-for attempt in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -fsS -m 2 http://127.0.0.1:3000/health >/dev/null 2>&1; then
     HEALTHY=1
     break
@@ -249,7 +249,14 @@ echo
 echo "────────────────────────────  vpnui installed  ────────────────────────────"
 echo " Panel:      http://127.0.0.1:3000  (put a TLS reverse proxy in front for remote access)"
 echo " Install:    $INSTALL_DIR"
-echo " OpenVPN:    $([[ $SKIP_OPENVPN -eq 1 ]] && echo 'skipped' || (openvpn_usable && echo 'existing installation reused' || echo 'freshly provisioned'))"
+if [[ $SKIP_OPENVPN -eq 1 ]]; then
+  OPENVPN_STATE="skipped"
+elif openvpn_usable; then
+  OPENVPN_STATE="existing installation reused"
+else
+  OPENVPN_STATE="freshly provisioned"
+fi
+echo " OpenVPN:    $OPENVPN_STATE"
 if [[ -n "$GENERATED_ADMIN_PASSWORD" ]]; then
   echo
   echo " ┌──────────────────────────────────────────────────────────────────────┐"
