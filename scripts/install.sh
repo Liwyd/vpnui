@@ -212,10 +212,26 @@ qualify_image_ref() { # add docker.io/ when the ref has no registry host
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || echo '')"
 SOURCE_DIR=""
 CLEANUP_TMP=""
+SKIP_COPY=0
 if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../Dockerfile" ]]; then
   SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-  log "using local source tree: $SOURCE_DIR"
-else
+  if [[ "$(readlink -f "$SOURCE_DIR")" == "$(readlink -f "$INSTALL_DIR")" ]]; then
+    # `vpnui install` re-runs this script from inside INSTALL_DIR. Copying the
+    # tree onto itself would rm each file and then fail to cp it back, so the
+    # files are either already in place (skip) or damaged (restore via clone).
+    if [[ -f "$INSTALL_DIR/docker-compose.yml" && -f "$INSTALL_DIR/package.json" &&
+      -d "$INSTALL_DIR/backend" && -d "$INSTALL_DIR/public" ]]; then
+      SKIP_COPY=1
+      log "panel files already in place at $INSTALL_DIR (nothing to copy)"
+    else
+      log "local tree at $INSTALL_DIR is incomplete — restoring from $REPO_URL"
+      SOURCE_DIR=""
+    fi
+  else
+    log "using local source tree: $SOURCE_DIR"
+  fi
+fi
+if [[ -z "$SOURCE_DIR" ]]; then
   command -v git >/dev/null || die "git is required to download the panel source"
   log "downloading panel source from $REPO_URL"
   CLEANUP_TMP="$(mktemp -d)"
@@ -224,14 +240,16 @@ else
   SOURCE_DIR="$CLEANUP_TMP/src"
 fi
 
-mkdir -p "$INSTALL_DIR"
-log "installing panel files into $INSTALL_DIR"
-for item in Dockerfile docker-compose.yml package.json package-lock.json backend public scripts .env.example README.md; do
-  [[ -e "$SOURCE_DIR/$item" ]] || continue
-  rm -rf "${INSTALL_DIR:?}/$item"
-  cp -a "$SOURCE_DIR/$item" "$INSTALL_DIR/"
-done
-chmod +x "$INSTALL_DIR/scripts/"*.sh "$INSTALL_DIR/scripts/vpnui" 2>/dev/null || true
+if [[ $SKIP_COPY -eq 0 ]]; then
+  mkdir -p "$INSTALL_DIR"
+  log "installing panel files into $INSTALL_DIR"
+  for item in Dockerfile docker-compose.yml package.json package-lock.json backend public scripts .env.example README.md; do
+    [[ -e "$SOURCE_DIR/$item" ]] || continue
+    rm -rf "${INSTALL_DIR:?}/$item"
+    cp -a "$SOURCE_DIR/$item" "$INSTALL_DIR/"
+  done
+  chmod +x "$INSTALL_DIR/scripts/"*.sh "$INSTALL_DIR/scripts/vpnui" 2>/dev/null || true
+fi
 [[ -z "$CLEANUP_TMP" ]] || rm -rf "$CLEANUP_TMP"
 
 # ---------------------------------------------------------------------------

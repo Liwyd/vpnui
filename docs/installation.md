@@ -72,7 +72,9 @@ fully deterministic.
 
 The installer is idempotent — re-running it is the upgrade path
 (`vpnui update` pulls the newest registry image, or rebuilds, with a backup
-first).
+first). Re-running also never copies the install tree onto itself
+(`vpnui install` executes the script from inside `/opt/vpnui`); if the
+tree is incomplete, it is restored from the repository automatically.
 
 ### Image source
 
