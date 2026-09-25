@@ -27,8 +27,10 @@ services:
       # PKI (rw: certs are issued/revoked by the panel).
       # ":z" relabels the mount for SELinux hosts (harmless elsewhere).
       - /etc/openvpn/server:/etc/openvpn/server:rw,z
-      # Panel state (users, audit log, generated client profiles)
-      - vpnui-data:/var/lib/vpnui:rw
+      # Panel state (users, audit log, generated client profiles).
+      # Bind mount (not a named volume) so vpnui backup/restore can archive
+      # it directly from the host filesystem.
+      - /var/lib/vpnui:/var/lib/vpnui:rw,z
       # Optional observability mounts (uncomment if the host has them)
       # - /var/run/openvpn-server:/var/run/openvpn-server:rw  # session kick
       # - /var/log/openvpn:/var/log/openvpn:ro                # live sessions
@@ -39,6 +41,3 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
-
-volumes:
-  vpnui-data:
