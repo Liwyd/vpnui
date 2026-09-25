@@ -22,12 +22,16 @@ container deployment.
 - **Idempotent installer + CLI** — `scripts/install.sh` provisions OpenVPN
   (pinned, SHA-256-verified vendored copy of
   [angristan/openvpn-install](https://github.com/angristan/openvpn-install))
-  only when needed, reuses existing installations untouched, generates a
-  strong `JWT_SECRET`, prints the initial admin password **once**, and
-  installs the `vpnui` CLI.
+  only when needed, reuses existing installations untouched, **asks for the
+  basic panel settings** (direct vs loopback access, port, admin
+  credentials) whenever a terminal is attached — including through
+  `curl | sudo bash` — generates a strong `JWT_SECRET`, prints the initial
+  admin password **once**, and installs the `vpnui` CLI. The final summary
+  shows the dashboard URL with your **server IP** in direct mode.
 - **Diagnostics, backup, update** — `vpnui doctor` (✓/⚠/✗ with fix hints),
-  `vpnui backup` / `vpnui restore`, `vpnui update` (backup → rebuild →
-  health check).
+  `vpnui backup` / `vpnui restore`, `vpnui update` (backup → pull new image
+  or rebuild → health check → **automatic rollback on failure** → **old
+  image pruned**; panel data is never touched).
 
 ## Quick start
 
@@ -44,9 +48,13 @@ curl -fsSL https://raw.githubusercontent.com/Liwyd/vpnui/main/scripts/install.sh
 ```
 
 The installer prints the initial admin credentials **once** — copy them
-immediately. It pulls the published image (`liwyd/vpnui:latest`) from Docker
-Hub and only builds locally when the registry image is unavailable
-(`--image` to override). Then:
+immediately. With a terminal attached it prompts for the basic settings
+(direct access via the server IP vs loopback behind a reverse proxy, panel
+port, admin user/password, registry image); in scripts use
+`--non-interactive` (loopback, port 3000) or the corresponding flags
+(`--bind`, `--port`, `--admin-user`, `--image`). It pulls the published
+image (`liwyd/vpnui:latest`) from Docker Hub and only builds locally when
+the registry image is unavailable. Then:
 
 ```bash
 vpnui doctor    # verify the whole stack, with fix hints
@@ -54,8 +62,9 @@ vpnui status    # container + health
 vpnui logs      # follow panel logs
 ```
 
-Open `http://127.0.0.1:3000` (put a TLS reverse proxy in front for remote
-access — the panel deliberately serves plain HTTP on loopback by default).
+Open the URL the installer prints: `http://<server-ip>:3000` in direct mode
+(put a TLS reverse proxy in front before exposing it to the internet), or
+`http://127.0.0.1:3000` in loopback mode.
 
 ## CLI
 
@@ -64,11 +73,11 @@ access — the panel deliberately serves plain HTTP on loopback by default).
 | `vpnui install` | (Re)run the idempotent installer |
 | `vpnui start` / `stop` / `restart` / `status` | Container lifecycle |
 | `vpnui logs` | Follow panel logs |
-| `vpnui update` | Backup → pull registry image (or rebuild) → restart → health check |
+| `vpnui update` | Backup → pull new image (or rebuild) → health check → rollback on failure → prune old image (data untouched) |
 | `vpnui backup [DIR]` | Archive PKI + panel data + `.env` |
 | `vpnui restore <archive>` | Restore a backup (safety backup first) |
 | `vpnui doctor` | Diagnostics with ✓/⚠/✗ and fix hints |
-| `vpnui uninstall [--purge]` | Remove the panel (OpenVPN untouched unless purged) |
+| `vpnui uninstall [--purge] [--delete-backups]` | Stop container, remove CLI/scripts (keeps source/data/images); `--purge` deletes everything — with a ✓/✗ verification report. OpenVPN untouched. |
 
 ## Architecture (short version)
 
