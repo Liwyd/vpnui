@@ -1,2 +1,20 @@
+# Dependencies
 /node_modules
-/package-lock.json
+
+# Secrets — never commit
+/.env
+/.env.*
+!.env.example
+
+# Runtime data (users, audit log, generated client configs)
+/data/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
