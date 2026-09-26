@@ -83,7 +83,7 @@ Open the URL the installer prints: `http://<server-ip>:3000` in direct mode
 | `vpnui restore <archive>` | Restore a backup (safety backup first) |
 | `vpnui user add/list/reset/delete <name>` | Manage panel accounts (runs inside the container; `add`/`reset` prompt for passwords on a TTY) |
 | `vpnui doctor` | Diagnostics with ✓/⚠/✗ and fix hints |
-| `vpnui uninstall [--purge] [--delete-backups]` | Stop container, remove CLI/scripts (keeps source/data/images); `--purge` deletes everything — with a ✓/✗ verification report. OpenVPN untouched. |
+| `vpnui uninstall [--purge] [--keep-openvpn] [--delete-backups]` | Stop container, remove CLI/scripts (keeps source/data/images); `--purge` deletes everything — including the OpenVPN server installation — with a ✓/✗ verification report (`--keep-openvpn` to keep OpenVPN). |
 
 ## Architecture (short version)
 

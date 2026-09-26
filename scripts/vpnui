@@ -45,8 +45,9 @@ Commands:
   doctor      Run diagnostics with fix hints
   uninstall   Stop the container, remove CLI/scripts (keeps source, data,
               images). Add --purge to delete everything: container, images,
-              install dir, data dir and CLI (--delete-backups also drops
-              /var/backups/vpnui). OpenVPN is left untouched either way.
+              install dir, data dir, CLI and the OpenVPN server installation
+              (--keep-openvpn keeps OpenVPN; --delete-backups also drops
+              /var/backups/vpnui).
   version     Print CLI version
   help        Show this help
 EOF
@@ -271,26 +272,94 @@ prune_old_image() { # prune_old_image OLD_IMAGE_ID
   fi
 }
 
+# --- openvpn removal (purge only) -------------------------------------------
+# The vendored angristan script performs the complete cleanup for the
+# standard layout (service, firewall, sysctl, package, /etc/openvpn).
+# A custom VPNUI_OVPN_HOST_DIR layout (test fixture) is only removed as a
+# directory — no services, packages or firewall rules are involved.
+OPENVPN_RESULT="" # removed | none | kept
+OPENVPN_REASON=""
+
+openvpn_purge() {
+  local dir="${VPNUI_OPENVPN_DIR:-${VPNUI_OVPN_HOST_DIR:-/etc/openvpn/server}}"
+  local vendor="$INSTALL_DIR/scripts/vendor/openvpn-install.sh"
+  dir="${dir%/}"
+
+  if [[ "${VPNUI_KEEP_OPENVPN:-0}" == "1" ]]; then
+    OPENVPN_RESULT=kept
+    OPENVPN_REASON="VPNUI_KEEP_OPENVPN=1"
+    return 0
+  fi
+  if [[ ! -f "$dir/server.conf" ]]; then
+    OPENVPN_RESULT=none
+    return 0
+  fi
+
+  if [[ "$dir" == "/etc/openvpn/server" ]]; then
+    if [[ $EUID -ne 0 ]]; then
+      OPENVPN_RESULT=kept
+      OPENVPN_REASON="needs root — rerun the purge as root"
+      return 0
+    fi
+    log "removing the OpenVPN server installation"
+    if [[ -f "$vendor" ]]; then
+      # The vendored script may exit non-zero after a successful removal
+      # (its last step is 'apt-get update') — the files decide success.
+      bash "$vendor" uninstall --force ||
+        warn "the OpenVPN uninstaller reported errors (removal is verified below)"
+    else
+      warn "vendored OpenVPN uninstaller missing — removing manually"
+      systemctl disable --now openvpn-server@server 2>/dev/null || true
+      systemctl disable --now openvpn 2>/dev/null || true
+      rm -rf /etc/openvpn
+      if command -v apt-get >/dev/null; then
+        apt-get remove --purge -y openvpn || warn "could not remove the openvpn package"
+      elif command -v dnf >/dev/null; then
+        dnf remove -y openvpn || warn "could not remove the openvpn package"
+      elif command -v yum >/dev/null; then
+        yum remove -y openvpn || warn "could not remove the openvpn package"
+      fi
+    fi
+  else
+    log "removing the OpenVPN server data at $dir"
+    rm -rf "$dir"
+  fi
+
+  if [[ -f "$dir/server.conf" ]]; then
+    OPENVPN_RESULT=kept
+    OPENVPN_REASON="files still present at $dir"
+  else
+    OPENVPN_RESULT=removed
+  fi
+}
+
 cmd_uninstall() {
-  local purge=0 delete_backups=0
+  local purge=0 delete_backups=0 keep_openvpn=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
     --purge) purge=1 ;;
+    --keep-openvpn) keep_openvpn=1 ;;
     --delete-backups) delete_backups=1 ;;
     -h | --help)
-      echo "Usage: vpnui uninstall [--purge] [--delete-backups]"
+      echo "Usage: vpnui uninstall [--purge] [--keep-openvpn] [--delete-backups]"
       echo
       echo "  (default)          stop container + network, remove CLI and helper"
       echo "                     scripts; source, data, backups and images are kept"
-      echo "  --purge            also delete images, $INSTALL_DIR and $DATA_DIR"
+      echo "  --purge            also delete images, $INSTALL_DIR, $DATA_DIR and the"
+      echo "                     OpenVPN server installation (service, firewall,"
+      echo "                     sysctl and package via the vendored uninstaller)"
+      echo "  --keep-openvpn     with --purge: keep the OpenVPN server installation"
       echo "  --delete-backups   with --purge: also delete $BACKUP_DIR"
-      echo "  OpenVPN is never removed by this command."
+      echo "  Without --purge, OpenVPN is never touched."
       exit 0
       ;;
     *) die "unknown option for uninstall: $1 (see: vpnui uninstall --help)" ;;
     esac
     shift
   done
+  if [[ $keep_openvpn -eq 1 && $purge -eq 0 ]]; then
+    die "--keep-openvpn only makes sense with --purge"
+  fi
 
   local env_file="$INSTALL_DIR/.env" compose_file="$INSTALL_DIR/docker-compose.yml"
   local image="" cid="" old_id="" engine_ok=0
@@ -351,6 +420,13 @@ cmd_uninstall() {
   rm -rf "$LIB_DIR" 2>/dev/null || true
 
   if [[ $purge -eq 1 ]]; then
+    # OpenVPN first — the vendored uninstaller lives in $INSTALL_DIR.
+    if [[ $keep_openvpn -eq 1 ]]; then
+      OPENVPN_RESULT=kept
+      OPENVPN_REASON="--keep-openvpn"
+    else
+      openvpn_purge
+    fi
     log "removing $INSTALL_DIR and $DATA_DIR"
     rm -rf "$INSTALL_DIR" "$DATA_DIR" 2>/dev/null || true
     if [[ $delete_backups -eq 1 ]]; then
@@ -398,6 +474,22 @@ cmd_uninstall() {
     v_ok "images kept by default (use --purge to delete them)"
   fi
 
+  if [[ $purge -eq 1 ]]; then
+    case "$OPENVPN_RESULT" in
+    removed) v_ok "OpenVPN installation removed" ;;
+    none) v_ok "no OpenVPN installation found (nothing to remove)" ;;
+    kept)
+      if [[ "$OPENVPN_REASON" == "--keep-openvpn" || "$OPENVPN_REASON" == "VPNUI_KEEP_OPENVPN=1" ]]; then
+        v_ok "OpenVPN kept ($OPENVPN_REASON)"
+      else
+        v_fail "OpenVPN kept: $OPENVPN_REASON"
+      fi
+      ;;
+    esac
+  else
+    v_ok "OpenVPN untouched (remove with: vpnui uninstall --purge)"
+  fi
+
   if [[ -e "$CLI_LINK" ]]; then v_fail "command still on PATH: $CLI_LINK"; else v_ok "command removed: $CLI_LINK"; fi
   if [[ -e "$LIB_DIR" ]]; then v_fail "helper scripts still present: $LIB_DIR"; else v_ok "helper scripts removed: $LIB_DIR"; fi
 
@@ -420,10 +512,12 @@ cmd_uninstall() {
   fi
   if [[ $purge -eq 1 ]]; then
     ok "verified: no trace of the vpnui panel remains"
-    warn "OpenVPN was NOT removed — to remove it: openvpn-install uninstall"
+    if [[ "$OPENVPN_RESULT" == "kept" ]]; then
+      warn "OpenVPN kept ($OPENVPN_REASON) — to remove it too: vpnui uninstall --purge"
+    fi
   else
     ok "verified: container, command and scripts removed"
-    warn "reinstall with: sudo bash $INSTALL_DIR/scripts/install.sh   (purge: vpnui uninstall --purge)"
+    warn "reinstall with: sudo bash $INSTALL_DIR/scripts/install.sh   (full removal incl. OpenVPN: vpnui uninstall --purge)"
   fi
 }
 

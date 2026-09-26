@@ -198,15 +198,17 @@ sudo vpnui uninstall            # stop container, remove CLI/scripts; keeps
                                 # source, data, backups and images
 sudo vpnui uninstall --purge    # complete removal: container, images,
                                 # /opt/vpnui, /var/lib/vpnui, CLI, scripts
-sudo vpnui uninstall --purge --delete-backups   # also /var/backups/vpnui
-# OpenVPN itself (never touched by vpnui uninstall):
-sudo openvpn-install uninstall  # (vendored script also offers this)
+                                # AND the OpenVPN server installation
+sudo vpnui uninstall --purge --keep-openvpn   # everything except OpenVPN
+sudo vpnui uninstall --purge --delete-backups # also /var/backups/vpnui
 ```
 
 Both modes print a **verification table** (`✓/✗`) afterwards and exit
 non-zero if anything that should be gone is still present — so you always
-know the removal actually completed. OpenVPN is left untouched unless you
-remove it explicitly.
+know the removal actually completed. `--purge` removes OpenVPN the same way
+it was provisioned (service, firewall rules, sysctl, package) using the
+vendored uninstaller — `--keep-openvpn` keeps it. Without `--purge`,
+OpenVPN is never touched.
 
 ## Troubleshooting
 
