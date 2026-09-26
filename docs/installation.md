@@ -124,8 +124,14 @@ on the command line.
 ```bash
 vpnui doctor     # full-stack diagnostics with fix hints
 vpnui status     # container + health
+vpnui user list  # panel accounts
 openvpn --version
 ```
+
+Manage panel accounts with `vpnui user add <name> [--role admin] [--password …]`,
+`vpnui user list`, `vpnui user reset <name>` and `vpnui user delete <name>` —
+without `--password` the container prompts interactively (roles: `admin`,
+`operator`, `user`, `readonly`).
 
 Log in at the URL printed by the installer — `http://<server-ip>:3000` in
 direct mode, `http://127.0.0.1:3000` in loopback mode — with the printed

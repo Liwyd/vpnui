@@ -12,6 +12,7 @@ LIB_DIR="${VPNUI_LIB:-/usr/local/lib/vpnui}"
 CLI_LINK="${VPNUI_CLI_LINK:-/usr/local/bin/vpnui}"
 DATA_DIR="${VPNUI_DATA_DIR:-/var/lib/vpnui}"
 BACKUP_DIR="${VPNUI_BACKUP_DIR:-/var/backups/vpnui}"
+PANEL_CONTAINER="${VPNUI_CONTAINER:-vpnui}"
 
 COMPOSE=()
 ENGINE=""
@@ -40,6 +41,7 @@ Commands:
               Panel data is never touched.
   backup      Create a backup archive (see vpnui backup --help)
   restore     Restore a backup archive (see vpnui restore --help)
+  user        Manage panel accounts: vpnui user add|list|reset|delete <name>
   doctor      Run diagnostics with fix hints
   uninstall   Stop the container, remove CLI/scripts (keeps source, data,
               images). Add --purge to delete everything: container, images,
@@ -425,6 +427,173 @@ cmd_uninstall() {
   fi
 }
 
+# --- user management ---------------------------------------------------------
+# Panel accounts live in $DATA_DIR/users.json (bind-mounted). The management
+# CLI (backend/cli/users.js) runs inside the container where deps are baked in.
+
+user_prepare() {
+  if [[ -z "$ENGINE" ]]; then
+    detect_compose || true
+  fi
+  [[ -n "$ENGINE" ]] || die "no container engine found (docker/podman)"
+  "$ENGINE" info >/dev/null 2>&1 || die "$ENGINE is not running — start the daemon first"
+  local running
+  running="$("$ENGINE" inspect -f '{{.State.Running}}' "$PANEL_CONTAINER" 2>/dev/null || true)"
+  [[ "$running" == "true" ]] || die "panel container is not running — start it: vpnui start"
+}
+
+user_exec() { # user_exec ARGS... — run the in-container user CLI
+  local -a tty=(-i)
+  if [[ -t 0 && -t 1 ]]; then
+    tty+=(-t)
+  fi
+  "$ENGINE" exec ${tty[@]+"${tty[@]}"} "$PANEL_CONTAINER" node backend/cli/users.js "$@"
+}
+
+user_usage() {
+  cat <<EOF
+Usage: vpnui user <add|list|reset|delete> ...
+
+  vpnui user list
+      List panel accounts (username, role, created, last login).
+
+  vpnui user add <username> [--role ROLE] [--password PASS]
+      Create an account. Roles: admin, operator, user, readonly.
+      Without --password/--role the container prompts interactively.
+
+  vpnui user reset <username> [--password PASS]
+      Reset an account's password (prompts when a TTY is attached).
+
+  vpnui user delete <username> [--yes]
+      Delete an account (asks for confirmation on a TTY).
+
+Notes:
+  - Runs inside the panel container against $DATA_DIR/users.json.
+  - Prefer the interactive prompt over --password: flags are visible to
+    other local users in process listings.
+  - Changing a role later is only available via the API (PUT /api/users/:name).
+EOF
+}
+
+cmd_user() {
+  local sub="${1:-help}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+  case "$sub" in
+  list)
+    [[ $# -eq 0 ]] || die "usage: vpnui user list"
+    user_prepare
+    user_exec list
+    ;;
+  add)
+    local username="" role="" password=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+      --role)
+        [[ $# -ge 2 ]] || die "--role requires a value"
+        role="$2"
+        shift 2
+        ;;
+      --password)
+        [[ $# -ge 2 ]] || die "--password requires a value"
+        password="$2"
+        shift 2
+        ;;
+      --username)
+        [[ $# -ge 2 ]] || die "--username requires a value"
+        username="$2"
+        shift 2
+        ;;
+      -*) die "unknown option for user add: $1 (see: vpnui user --help)" ;;
+      *)
+        [[ -z "$username" ]] || die "unexpected argument: $1"
+        username="$1"
+        shift
+        ;;
+      esac
+    done
+    [[ -n "$username" ]] || die "usage: vpnui user add <username> [--role ROLE] [--password PASS]"
+    if [[ ! -t 0 ]]; then
+      [[ -n "$password" ]] || die "no TTY attached — pass --password (or run interactively)"
+      [[ -n "$role" ]] || die "no TTY attached — pass --role admin|operator|user|readonly"
+    fi
+    user_prepare
+    local -a args=(create --username "$username")
+    if [[ -n "$role" ]]; then args+=(--role "$role"); fi
+    if [[ -n "$password" ]]; then args+=(--password "$password"); fi
+    user_exec "${args[@]}"
+    ok "user \"$username\" created"
+    ;;
+  reset)
+    local username="" password=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+      --password)
+        [[ $# -ge 2 ]] || die "--password requires a value"
+        password="$2"
+        shift 2
+        ;;
+      --username)
+        [[ $# -ge 2 ]] || die "--username requires a value"
+        username="$2"
+        shift 2
+        ;;
+      -*) die "unknown option for user reset: $1 (see: vpnui user --help)" ;;
+      *)
+        [[ -z "$username" ]] || die "unexpected argument: $1"
+        username="$1"
+        shift
+        ;;
+      esac
+    done
+    [[ -n "$username" ]] || die "usage: vpnui user reset <username> [--password PASS]"
+    if [[ ! -t 0 && -z "$password" ]]; then
+      die "no TTY attached — pass --password (or run interactively)"
+    fi
+    user_prepare
+    local -a args=(reset-password --username "$username")
+    if [[ -n "$password" ]]; then args+=(--password "$password"); fi
+    user_exec "${args[@]}"
+    ok "password reset for \"$username\""
+    ;;
+  delete)
+    local username="" yes=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+      --yes) yes=1 ;;
+      --username)
+        [[ $# -ge 2 ]] || die "--username requires a value"
+        username="$2"
+        shift 2
+        ;;
+      -*) die "unknown option for user delete: $1 (see: vpnui user --help)" ;;
+      *)
+        [[ -z "$username" ]] || die "unexpected argument: $1"
+        username="$1"
+        shift
+        ;;
+      esac
+    done
+    [[ -n "$username" ]] || die "usage: vpnui user delete <username> [--yes]"
+    if [[ -t 0 && $yes -eq 0 ]]; then
+      local reply=""
+      read -r -p "Delete user \"$username\"? [y/N] " reply || die "aborted"
+      [[ "$reply" =~ ^[Yy] ]] || die "aborted"
+    fi
+    user_prepare
+    user_exec delete --username "$username"
+    ok "user \"$username\" deleted"
+    ;;
+  help | -h | --help)
+    user_usage
+    ;;
+  *)
+    die "unknown user subcommand: $sub (see: vpnui user --help)"
+    ;;
+  esac
+}
+
 run_helper() { # run_helper NAME [args...]
   local name="$1"
   shift
@@ -452,6 +621,7 @@ logs) compose logs -f --tail 200 ;;
 update) cmd_update ;;
 backup) run_helper backup.sh "$@" ;;
 restore) run_helper restore.sh "$@" ;;
+user) cmd_user "$@" ;;
 doctor) run_helper doctor.sh "$@" ;;
 uninstall) cmd_uninstall "$@" ;;
 version) echo "vpnui $VERSION" ;;

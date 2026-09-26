@@ -44,8 +44,9 @@ root): `sudo chown root:root /var/lib/vpnui && sudo chmod 755 /var/lib/vpnui`.
 
 ### Login always fails with 403 INVALID_CREDENTIALS
 
-- Lost the printed password? Reset it:
-  `sudo node /opt/vpnui/backend/cli/users.js reset-password --username <name> --password '...'`
+- Lost the printed password? Reset it: `vpnui user reset <name>` (prompts for
+  the new password), or inside the container:
+  `docker compose exec vpnui node backend/cli/users.js reset-password --username <name> --password '...'`
 - `users.json` restored from an older backup than you think?
 
 ### JWT errors / everyone logged out after an upgrade
