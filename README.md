@@ -32,6 +32,10 @@ container deployment.
   `vpnui backup` / `vpnui restore`, `vpnui update` (backup → pull new image
   or rebuild → health check → **automatic rollback on failure** → **old
   image pruned**; panel data is never touched).
+- **Panel account management** — `vpnui user add / list / reset / delete`
+  manages the panel accounts from the host (runs inside the container
+  against `/var/lib/vpnui/users.json`; prompts for passwords on a TTY,
+  roles: `admin` / `operator` / `user` / `readonly`).
 
 ## Quick start
 
@@ -60,6 +64,7 @@ the registry image is unavailable. Then:
 vpnui doctor    # verify the whole stack, with fix hints
 vpnui status    # container + health
 vpnui logs      # follow panel logs
+vpnui user list # panel accounts (add one: vpnui user add <name> --role admin)
 ```
 
 Open the URL the installer prints: `http://<server-ip>:3000` in direct mode
